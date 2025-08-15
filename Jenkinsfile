@@ -1,24 +1,30 @@
 pipeline {
-    agent any     
+    agent any
+
     environment {
+        IMAGE_NAME = "kmaharwal1/cicd-e2e"
         IMAGE_TAG = "${BUILD_NUMBER}"
     }
-    
+
     stages {
-        
-        stage('Checkout'){
-           steps {
-                git url: 'https://github.com/KonpalM/cicd-end-to-end',
-                branch: 'main'
-           }
+
+        stage('Checkout App Repo') {
+            steps {
+                git branch: 'main', url: 'https://github.com/KonpalM/cicd-end-to-end'
+            }
         }
 
-        stage('Build Docker'){
-            steps{
-                script{
+        stage('Build Docker Image') {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'dockerhub-creds',
+                    usernameVariable: 'DOCKER_USER',
+                    passwordVariable: 'DOCKER_PASS'
+                )]) {
                     sh '''
-                    echo 'Buid Docker Image'
-                    docker build -t kmaharwal1/cicd-e2e:${BUILD_NUMBER} .
+                    echo "Building Docker Image..."
+                    echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+                    docker build -t $IMAGE_NAME:$IMAGE_TAG .
                     '''
                 }
             }
@@ -26,43 +32,46 @@ pipeline {
 
         stage('Push Docker Image') {
             steps {
-                script {
-                    withCredentials([usernamePassword(
-                        credentialsId: 'dockerhub-creds', 
-                        usernameVariable: 'DOCKER_USER',
-                        passwordVariable: 'DOCKER_PASS'
-                    )]) {
-                        sh '''
-                        echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
-                        echo 'Push to Repo'
-                        docker push kmaharwal1/cicd-e2e:${BUILD_NUMBER}
-                        '''
-                    }
+                withCredentials([usernamePassword(
+                    credentialsId: 'dockerhub-creds',
+                    usernameVariable: 'DOCKER_USER',
+                    passwordVariable: 'DOCKER_PASS'
+                )]) {
+                    sh '''
+                    echo "Pushing Docker Image..."
+                    echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+                    docker push $IMAGE_NAME:$IMAGE_TAG
+                    '''
                 }
             }
         }
-        
-        stage('Checkout K8S manifest SCM'){
+
+        stage('Checkout K8S Manifest Repo') {
             steps {
-                git url: 'https://github.com/KonpalM/cicd-demo-manifests-repo.git',
-                branch: 'main'
+                git branch: 'main', url: 'https://github.com/KonpalM/cicd-demo-manifests-repo.git'
             }
         }
-        
-        stage('Update K8S manifest & push to Repo'){
+
+        stage('Update K8S manifest & Push') {
             steps {
-                script{
-                    withCredentials([usernamePassword(credentialsId: 'fbe1c471-7df9-4cc6-af09-ec0586e6dcd6', passwordVariable: 'GIT_PASSWORD', usernameVariable: 'GIT_USERNAME')]) {
-                        sh '''
-                        cat deploy.yaml
-                        sed -i "s/32/${BUILD_NUMBER}/g" deploy.yaml
-                        cat deploy.yaml
-                        git add deploy.yaml
-                        git commit -m 'Updated the deploy yaml | Jenkins Pipeline'
-                        git remote -v
-                        git push https://github.com/KonpalM/cicd-demo-manifests-repo.git HEAD:main
-                        '''                        
-                    }
+                withCredentials([usernamePassword(
+                    credentialsId: 'fbe1c471-7df9-4cc6-af09-ec0586e6dcd6',
+                    usernameVariable: 'GIT_USERNAME',
+                    passwordVariable: 'GIT_PASSWORD'
+                )]) {
+                    sh '''
+                    echo "Updating deploy.yaml with new image tag..."
+                    sed -i "s|image: .*$|image: '$IMAGE_NAME:$IMAGE_TAG'|g" deploy.yaml
+
+                    echo "Committing changes..."
+                    git config user.email "jenkins@example.com"
+                    git config user.name "Jenkins CI"
+                    git add deploy.yaml
+                    git commit -m "Update deploy.yaml to image tag $IMAGE_TAG"
+
+                    echo "Pushing changes..."
+                    git push https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/KonpalM/cicd-demo-manifests-repo.git HEAD:main
+                    '''
                 }
             }
         }
